@@ -136,20 +136,23 @@ class Bitwarden2KeePassExporter:
         self.bw = None
         self.kp = None
         self.folders_dict = {}
+
         self.stats = {
             "bw_folders": 0,
             "bw_items": 0,
             "bw_attachments": 0,
             "bw_passkeys": 0,
             "bw_ssh_keys": 0,
+            "bw_totp": 0,  # Add this line
             "kp_groups": 0,
             "kp_entries": 0,
             "kp_attachments": 0,
             "kp_passkeys": 0,
             "kp_ssh_keys": 0,
+            "kp_totp": 0,  # Add this line
             "errors": 0
         }
-        
+
         if debug:
             logger.setLevel(logging.DEBUG)
 
@@ -483,22 +486,31 @@ class Bitwarden2KeePassExporter:
                                 }
                                 match_name = match_names.get(match_type, str(match_type))
                                 entry.set_custom_property(f"URL {idx} Match", match_name)
-                
+
                 # Handle TOTP - support multiple plugin formats
                 totp = login.get("totp")
                 if totp:
                     totp = totp.replace(" ", "").upper()
-                    
+
+                    # Increment Bitwarden TOTP counter
+                    self.stats["bw_totp"] += 1
+
                     # For KeePass built-in TOTP
                     entry.set_custom_property("TimeOtp-Secret-Base32", totp, protect=True)
-                    
+
                     # For KeePassXC compatibility
                     entry.set_custom_property("TOTP Seed", totp, protect=True)
                     entry.set_custom_property("TOTP Settings", "30;6")
-                    
+
                     # For KeeOtp plugin
-                    entry.otp = "otpauth://totp/?secret="+totp
-                    
+                    entry.otp = "otpauth://totp/?secret=" + totp
+
+                    # Increment KeePass TOTP counter
+                    self.stats["kp_totp"] += 1
+
+                    logger.debug(f"Added TOTP for item '{title}'")
+
+
             elif item_type == 2:  # Secure Note
                 entry = self.kp.add_entry(group, title, "", "", notes=notes)
                 entry.set_custom_property("Secure Note Type", str(item.get("secureNote", {}).get("type", 0)))
@@ -693,20 +705,22 @@ class Bitwarden2KeePassExporter:
         try:
             self.kp.save()
             logger.info(f"Saved KeePass database to {self.output_path}")
-            
+
             # Log statistics
             logger.info(f"Bitwarden: {self.stats['bw_folders']} folders, "
                         f"{self.stats['bw_items']} items, "
                         f"{self.stats['bw_attachments']} attachments, "
                         f"{self.stats['bw_passkeys']} passkeys, "
-                        f"{self.stats['bw_ssh_keys']} SSH keys")
-            
+                        f"{self.stats['bw_ssh_keys']} SSH keys, "
+                        f"{self.stats['bw_totp']} TOTP codes")
+
             logger.info(f"KeePass: {self.stats['kp_groups']} groups, "
                         f"{self.stats['kp_entries']} entries, "
                         f"{self.stats['kp_attachments']} attachments, "
                         f"{self.stats['kp_passkeys']} passkeys, "
-                        f"{self.stats['kp_ssh_keys']} SSH keys")
-            
+                        f"{self.stats['kp_ssh_keys']} SSH keys, "
+                        f"{self.stats['kp_totp']} TOTP codes")
+
             if self.stats["errors"] > 0:
                 logger.warning(f"Completed with {self.stats['errors']} errors")
             else:

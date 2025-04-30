@@ -15,6 +15,7 @@ A comprehensive utility for exporting Bitwarden vaults to KeePass format with su
 - **Batch Processing**: Configurable batch sizes for more efficient processing of large vaults
 - **Comprehensive Logging**: Detailed logging with configurable verbosity
 - **Automatic CLI Installation**: Automatically downloads the Bitwarden CLI if not found in the current directory or system PATH
+- **Incremental Backup Feature**: The tool supports creating incremental backups of your Bitwarden vault using the `--date-since` parameter (--date-since yyyy-mm-dd). This allows you to export only items that have been created or modified since a specific date.
 
 ## Requirements
 

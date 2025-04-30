@@ -16,12 +16,14 @@ import binascii
 import textwrap
 import re
 from datetime import datetime, timezone
+# noinspection PyUnresolvedReferences
 from typing import Dict, List, Any, Optional
 # Just with a possible purpose of merging into one script
 # weird otherwise
 
 # from bw_session import BwSession
 try:
+    # noinspection PyUnresolvedReferences,PyUnboundLocalVariable
     BwSession  # Just testing name existence
 except NameError:
     from bw_session import BwSession
@@ -114,6 +116,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# noinspection PyShadowingNames
 class Bitwarden2KeePassExporter:
     """Export Bitwarden vault to KeePass database."""
 
@@ -582,6 +585,7 @@ class Bitwarden2KeePassExporter:
                 ]:
                     if value := identity.get(key) or "":
                         protect = key in ["ssn", "passportNumber", "licenseNumber"]
+                        # noinspection PyUnboundLocalVariable
                         entry.set_custom_property(label, value, protect=protect)
 
             elif item_type == 5:  # SSH Key

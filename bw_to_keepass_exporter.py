@@ -15,7 +15,7 @@ import base64
 import binascii
 import textwrap
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 # Just with a possible purpose of merging into one script
 # weird otherwise
@@ -117,22 +117,45 @@ logger = logging.getLogger(__name__)
 class Bitwarden2KeePassExporter:
     """Export Bitwarden vault to KeePass database."""
 
-    def __init__(self, output_path: str = None, keyfile_path: str = None, 
-                 debug: bool = False, batch_size: int = 100, bw_path: str = None):
+    def __init__(self, output_path: str = None, keyfile_path: str = None,
+                 debug: bool = False, batch_size: int = 100, bw_path: str = None,
+                 date_since: str = None):
         """
         Initialize the exporter.
-        
+
         Args:
             output_path: Path for the output KeePass file
             keyfile_path: Optional path for a KeePass keyfile
             debug: Enable debug logging
             batch_size: Number of items to process in one batch
             bw_path: Custom path to Bitwarden CLI executable
+            date_since: Process only items modified on or after this date (YYYY-MM-DD)
         """
-        self.output_path = output_path or f"bw_export_{datetime.now().strftime('%Y%m%d')}.kdbx"
+        if output_path is None:
+            current_date = datetime.now().strftime('%Y%m%d')
+            if date_since:
+                # Convert date_since from YYYY-MM-DD to YYYYMMDD format
+                formatted_date_since = date_since.replace('-', '')
+                # Add suffix for partial exports
+                self.output_path = f"bw_export_{current_date}-partial_from_{formatted_date_since}.kdbx"
+            else:
+                # Standard name for full exports
+                self.output_path = f"bw_export_{current_date}.kdbx"
+        else:
+            # If output path is explicitly provided, respect it but still add suffix if needed
+            if date_since:
+                # Convert date_since from YYYY-MM-DD to YYYYMMDD format
+                formatted_date_since = date_since.replace('-', '')
+                # Split the path to insert the suffix before the extension
+                base, ext = os.path.splitext(output_path)
+                self.output_path = f"{base}-partial_from_{formatted_date_since}{ext}"
+            else:
+                self.output_path = output_path
+
         self.keyfile_path = keyfile_path
         self.batch_size = batch_size
         self.bw_path = bw_path
+        self.date_since = date_since
         self.bw = None
         self.kp = None
         self.folders_dict = {}
@@ -143,14 +166,15 @@ class Bitwarden2KeePassExporter:
             "bw_attachments": 0,
             "bw_passkeys": 0,
             "bw_ssh_keys": 0,
-            "bw_totp": 0,  # Add this line
+            "bw_totp": 0,
             "kp_groups": 0,
             "kp_entries": 0,
             "kp_attachments": 0,
             "kp_passkeys": 0,
             "kp_ssh_keys": 0,
-            "kp_totp": 0,  # Add this line
-            "errors": 0
+            "kp_totp": 0,
+            "errors": 0,
+            "skipped_items": 0  # Add counter for skipped items
         }
 
         if debug:
@@ -661,38 +685,71 @@ class Bitwarden2KeePassExporter:
         try:
             item_list_raw = self.bw.list_items()
             items = json.loads(item_list_raw)
-            
+
+            # Filter items by date if date_since is provided
+            if self.date_since:
+                try:
+                    # Parse the date_since string to a datetime object
+                    filter_date = datetime.strptime(self.date_since, "%Y-%m-%d").replace(
+                        hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc
+                    )
+
+                    # Count total items before filtering
+                    total_items = len(items)
+
+                    # Filter items where revisionDate >= date_since
+                    filtered_items = []
+                    for item in items:
+                        revision_date_str = item.get("revisionDate")
+                        if revision_date_str:
+                            # Bitwarden uses ISO format dates
+                            revision_date = datetime.fromisoformat(revision_date_str.replace("Z", "+00:00"))
+                            if revision_date >= filter_date:
+                                filtered_items.append(item)
+
+                    # Update statistics
+                    self.stats["skipped_items"] = total_items - len(filtered_items)
+                    items = filtered_items
+
+                    logger.info(
+                        f"Filtered items by date: processing {len(items)} items modified on or after {self.date_since} "
+                        f"(skipped {self.stats['skipped_items']} older items)")
+                except ValueError as e:
+                    logger.error(f"Invalid date format for --date-since: {str(e)}. Use YYYY-MM-DD format.")
+                    sys.exit(1)
+
             self.stats["bw_items"] = len(items)
             self.stats["bw_attachments"] = sum(len(i.get('attachments') or []) for i in items)
-            
+
             logger.info(f"Processing {self.stats['bw_items']} items with {self.stats['bw_attachments']} attachments")
-            
+
             # Process in batches
             for i in range(0, len(items), self.batch_size):
-                batch = items[i:i+self.batch_size]
-                logger.info(f"Processing batch {i//self.batch_size + 1}/{(len(items) + self.batch_size - 1)//self.batch_size}")
-                
+                batch = items[i:i + self.batch_size]
+                logger.info(
+                    f"Processing batch {i // self.batch_size + 1}/{(len(items) + self.batch_size - 1) // self.batch_size}")
+
                 for item in batch:
                     folder_id = item.get("folderId")
                     folder_entry = self.folders_dict.get(folder_id)
-                    
+
                     if folder_entry is None or folder_entry.get("name", "").strip().lower() == "no folder":
                         group = self.kp.root_group
                     else:
                         folder_parts = folder_entry.get("split", [])
                         group = self.get_or_create_group(folder_parts)
-                    
+
                     self.add_bitwarden_item(item, group)
-                
+
                 # Save progress after each batch
                 self.kp.save()
-                logger.info(f"Saved progress after batch {i//self.batch_size + 1}")
-                
+                logger.info(f"Saved progress after batch {i // self.batch_size + 1}")
+
             # Save final statistics
             self.stats["kp_entries"] = len(self.kp.entries)
             self.stats["kp_attachments"] = len(self.kp.attachments)
             self.stats["kp_groups"] = sum(1 for _ in self.kp.groups)
-            
+
         except Exception as e:
             logger.error(f"Failed to process items: {str(e)}")
             # Try to save what we have so far
@@ -725,11 +782,11 @@ class Bitwarden2KeePassExporter:
                 logger.warning(f"Completed with {self.stats['errors']} errors")
             else:
                 logger.info("Export completed successfully")
-            
+
             # Logout from Bitwarden
             if self.bw:
                 self.bw.logout()
-                
+
         except Exception as e:
             logger.error(f"Failed to finalize export: {str(e)}")
             sys.exit(1)
@@ -749,17 +806,19 @@ def main():
     parser.add_argument("-o", "--output", help="Output KeePass file path")
     parser.add_argument("-k", "--keyfile", help="Create and use a KeePass keyfile")
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging")
-    parser.add_argument("-b", "--batch-size", type=int, default=100, 
+    parser.add_argument("-b", "--batch-size", type=int, default=100,
                         help="Number of items to process in one batch")
     parser.add_argument("--bw-path", help="Custom path to Bitwarden CLI executable")
+    parser.add_argument("--date-since", help="Process only items modified on or after this date (YYYY-MM-DD)")
     args = parser.parse_args()
-    
+
     exporter = Bitwarden2KeePassExporter(
         output_path=args.output,
         keyfile_path=args.keyfile,
         debug=args.debug,
         batch_size=args.batch_size,
-        bw_path=args.bw_path
+        bw_path=args.bw_path,
+        date_since=args.date_since
     )
     exporter.run()
 

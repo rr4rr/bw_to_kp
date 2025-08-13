@@ -455,7 +455,7 @@ class BwSession:
                 if attempt < max_retries:
                     logger.info(f"Retrying command after error: {str(e)}")
                     time.sleep(1)  # Brief pause before retry
-                    return None
+                    continue
                 else:
                     raise RuntimeError(f"Command failed after {max_retries + 1} attempts: {str(e)}")
         return None
